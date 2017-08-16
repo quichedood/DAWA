@@ -4,14 +4,25 @@
    Edouard PIGEON - 2017
 */
 
-// Use LCD display ? comment if not
-#define USE_DISPLAY
-
-// Use 9 axis ? comment if not
-#define USE_BNO055
-
 // Librairies
 #include <SPI.h>
+
+/*
+   NeoGPS library
+   https://github.com/SlashDevin/NeoGPS
+*/
+#include <NMEAGPS.h>
+HardwareSerial & gps_port = Serial5;
+#define DEBUG_PORT SERIAL_PORT_USBVIRTUAL // Debug to USB serial console
+static NMEAGPS  gps;
+static gps_fix  fix_data;
+
+/*
+   thomasfredericks/Bounce2 library
+   https://github.com/thomasfredericks/Bounce2
+*/
+#include <Bounce2.h>
+Bounce debouncer = Bounce();
 
 /*
    Greiman/SdFat library
@@ -64,7 +75,7 @@ extEEPROM eep(kbits_2, 1, 8); // I2C Address 0x50
    I2C ASCII OLED : https://github.com/greiman/SSD1306Ascii
    SPI ASCII OLED : https://github.com/greiman/SSD1306Ascii (faster)
 */
-#ifdef USE_DISPLAY // Choose one of the 3 available LCD type
+
 // I2C ASCII OLED libraries
 /*#include "SSD1306Ascii.h" // OLED LCD based on SSD1306 chip, ASCII only no graphics (Official Github : https://github.com/greiman/SSD1306Ascii)
   #include "SSD1306AsciiWire.h"
@@ -89,22 +100,14 @@ SSD1306AsciiSpi oled; // 128x64 LCD OLED
 #define LCD_INIT       oled.begin(&Adafruit128x64, OLED_CS, OLED_DC);oled.setFont(System5x7);
 #define LCD_POS(x,y)   oled.setCursor(x, y);
 #define LCD_CLEAR      oled.clear();
-#else
-#define LCD_PRINT(x);
-#define LCD_INIT;
-#define LCD_POS;
-#define LCD_CLEAR;
-#endif
 
 /*
    9-axis Bosch BNO055 Adafruit library
    https://github.com/adafruit/Adafruit_BNO055
 */
-#ifdef USE_BNO055
-#include <Adafruit_BNO055.h> // Adafruit 9-axis BNO_055 lib (enable use of BNO055 with "USE_BNO055")
+#include <Adafruit_BNO055.h> // Adafruit 9-axis BNO_055 lib
 #include <Adafruit_Sensor.h>
 Adafruit_BNO055 bno = Adafruit_BNO055(55, BNO055_ADDRESS_B); // USE_BNO055_ADDRESS_B = Adress 0x29 (COM3 pin set to 1)
-#endif
 
 /*
    Variable PINs I/O
@@ -117,23 +120,39 @@ const uint8_t gearPin = A1; // A1
 const uint8_t sdCsPin = 7; // D7
 const uint8_t oledResetPin = 8; // D8
 const uint8_t timepulsePin = A2; //A2
+const unsigned char ubxRate10Hz[] PROGMEM = {0x06, 0x08, 0x06, 0x00, 0x64, 0x00, 0x01, 0x00, 0x01, 0x00};
+const unsigned char ubxTimepulse[] PROGMEM = {0x06, 0x31, 0x20, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x29, 0x00, 0x00, 0x00};
+//                                           |ID         |Lenght     |TP   |res  |res        |antCableD  |rfGrDelay  |freqPeriod             |freqPeriod lock        |Pulselenghtratio       |Pulselenghtratiolock   |UserConfigDelay        |Flags                 |
 
 /*
    Vars
 */
-volatile int eeptest = 5;
-int eeptest2 = 0;
+uint32_t lastPinRead = 0;
+uint32_t lastLCDupdate = 0;
+uint32_t lastSdSync = 0;
+uint32_t stopwatchStartTime = 0;
+uint32_t elapsedTime = 0;
+//float brt;
+bool gpsDataReady = false;
+bool sensorsDataReady = false;
+//char brts[8];
+
 
 // Generic
-bool interrupt_10hz = 0;
-uint8_t runCounter = 0, runCalibration = 0;
+uint8_t runCalibration = 0;
 uint8_t newRun = 0;
-float sec = 0;
-char secString[9];
+float sec = 0.000;
+char secString[11];
 uint8_t i, count;
+
+// GPS
+char latString[15];
+char longString[15];
+uint16_t nowms, nowms2;
 
 // Sensors
 uint16_t bikeRpm;
+float bikeRpmCoeff = 1.05;
 char bikeRpmString[6];
 uint16_t bikeSpeed;
 char bikeSpeedString[6];
@@ -143,38 +162,34 @@ uint8_t gearNCheck = 0;
 char gearvalueString[6];
 uint8_t brake = 0;
 char brakeString[4];
-bool isRunning = 0;
+bool isRunning = false;
 uint16_t throttle;
 char throttleString[4];
 
 // RTC
 RTC_DS1307 rtc;
-uint8_t datetime_array[6] = {1, 1, 17, 13, 37, 0}; // DD/MM/YY HH:MM:SS
-#ifdef USE_DISPLAY
 char datetime[11];
-#endif
 
 // SD Card
 File dateFile;
 SdFat sd;
 SdFile logFile;
 char filename[20];
-char sdString[50];
+char sdString[86]; //76
 
 // Display
 char lcdString[20];
 uint8_t lcdLine = 0;
 
 // 9-axis sensor
-#ifdef USE_BNO055
 char rollString[5];
 char pitchString[5];
 int8_t temperature;
 char temperatureString[4];
 uint8_t cal_sys, cal_gyro, cal_accel, cal_mag = 0;
 adafruit_bno055_offsets_t calibrationData;
+sensors_event_t event;
 //byte *calibrationBuffer = (byte *) &calibrationData;
-#endif
 
 /*
    Triggered when initialization error (program stop and slow blinking led)
@@ -183,8 +198,34 @@ void initerror() {
   delay(2000); // Pause 3 sec pour lecture infos LCD
   while (1) {
     digitalWrite(ledPin, digitalRead(ledPin) ^ 1); // Clignotement LED rapide (indique une erreur)
-    delay(1000);
+    delay(200);
   }
+}
+
+/*
+   Send UBX commands to UBLOX GPS
+*/
+void sendUBX( const unsigned char *progmemBytes, size_t len ) {
+  gps_port.write( 0xB5 ); // SYNC1
+  gps_port.write( 0x62 ); // SYNC2
+
+  uint8_t a = 0, b = 0;
+  while (len-- > 0) {
+    uint8_t c = pgm_read_byte( progmemBytes++ );
+    a += c;
+    b += a;
+    gps_port.write( c );
+  }
+
+  gps_port.write( a ); // CHECKSUM A
+  gps_port.write( b ); // CHECKSUM B
+}
+
+void extIntSys() {
+  //TcCount32* TC = (TcCount32*) TC4; // get timer struct
+  //TC->INTFLAG.bit.MC0 = 1; // writing a one clears the ovf flag of MC0 (P.624)
+
+
 }
 
 /*
@@ -193,6 +234,11 @@ void initerror() {
 void setup() {
   Wire.begin(); // I2C bus init
 
+  // GPS Init
+  gps_port.begin(9600); // Start the UART for the GPS device (you cannot block for more than "buffer size" * 11 / 9600 = 70ms)
+  sendUBX(ubxRate10Hz, sizeof(ubxRate10Hz)); // Set refresh rate to 10Hz
+  sendUBX(ubxTimepulse, sizeof(ubxTimepulse)); // Set timepulse output ON
+
   // Init I/O pins
   pinMode(ledPin, OUTPUT); // Button light
   pinMode(powerPin, INPUT); // ON/OFF button
@@ -200,9 +246,13 @@ void setup() {
   pinMode(throttlePin, INPUT); // Throttle sensor (analogic from 0v to 5v)
   pinMode(gearPin, INPUT); // Gear sensor (analogic from 0v to 5v)
   pinMode(oledResetPin, OUTPUT); // Reset on OLED screen
+  pinMode(timepulsePin, INPUT);
 
-  //pinMode(timepulsePin,INPUT);
-  //attachInterrupt(digitalPinToInterrupt(timepulsePin),extIntSys,FALLING);
+  // Debounce power button
+  debouncer.attach(powerPin);
+  debouncer.interval(2000); // interval in ms
+
+  //rtc.writeSqwPinMode(SquareWave4kHz);
 
   // Init + clear LCD (+Backlight)
   digitalWrite(oledResetPin, HIGH); // Reset pin on OLED screen should be tied to +VCC
@@ -229,24 +279,7 @@ void setup() {
   }
   LCD_PRINT("                OK");
 
-  // Date setup
-  dateFile = sd.open("DATE.TXT", FILE_READ); // If DATE.TXT is found, the date inside is read and updated (format : DD/MM/YY HH:MM:SS)
-  if (dateFile) {
-    LCD_POS(0, ++lcdLine);
-    LCD_PRINT("SET DATE ... ");
-    for (i = 0; i < 6; i++) {
-      datetime_array[i] = dateFile.parseInt();
-    }
-    dateFile.close();
-    rtc.adjust(DateTime(datetime_array[2], datetime_array[1], datetime_array[0], datetime_array[3], datetime_array[4], datetime_array[5]));
-    LCD_PRINT("      OK");
-
-    // Date is setup, we remove the file
-    sd.remove("DATE.TXT");
-  }
-
   // Init 9-axis sensor
-#ifdef USE_BNO055
   LCD_POS(0, ++lcdLine);
   LCD_PRINT("9-AXIS:");
   if (!bno.begin()) {
@@ -288,47 +321,17 @@ void setup() {
     }
   }
   digitalWrite(ledPin, LOW); // Calibration is done, LED off
-#endif
+
+  // End Init
   LCD_POS(0, ++lcdLine);
   LCD_PRINT("              READY !");
   delay(2000); // LCD user read time
   LCD_CLEAR;
 
   /*
-      First timer (TC4)
-      a 100ms interrupt
-      Prescaler = 1, Preload = 4798000, Source clock = 48000000
-      Counter on 32 bits > 2x 16 bits counters : TC3 (slave) and TC4 (master)
+      A 100ms interrupt based on GPS Ublox timepulse signal // Call "extIntSys" on each interruption
   */
-  REG_GCLK_CLKCTRL = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID_TC4_TC5) ; // Register CLKCTRL (Page 119)
-  while (GCLK->STATUS.bit.SYNCBUSY == 1); // wait for sync
-
-  // The type cast must fit with the selected timer mode
-  TcCount32* TC = (TcCount32*) TC4; // get timer struct
-
-  TC->CTRLA.reg &= ~TC_CTRLA_ENABLE;   // Disable TC (to enable configuration mode)
-  while (TC->STATUS.bit.SYNCBUSY == 1); // wait for sync
-  TC->CTRLA.reg |= TC_CTRLA_MODE_COUNT32;  // Set Timer counter Mode to 32 bits (Page 552)
-  while (TC->STATUS.bit.SYNCBUSY == 1); // wait for sync
-  TC->CTRLA.reg |= TC_CTRLA_WAVEGEN_MFRQ; // Set TC as  Match Frq
-  while (TC->STATUS.bit.SYNCBUSY == 1); // wait for sync
-  TC->CTRLA.reg |= TC_CTRLA_PRESCALER_DIV1;   // Set prescaler (Page 551)
-  while (TC->STATUS.bit.SYNCBUSY == 1); // wait for sync
-
-  // CC0 Register (preload)
-  // Resonator accuracy : https://github.com/manitou48/crystals/blob/master/crystals.txt
-  // SAMD21 use 1464*32768=47972352Hz
-  TC->CC[0].reg = 4798315; // 4798295 looks good / 275 faut ralentir / -50 / +25 / +15 / -10 / +5 / -1 / +1
-  while (TC->STATUS.bit.SYNCBUSY == 1); // wait for sync
-
-  TC->INTENSET.reg = 0;              // disable all interrupts
-  TC->INTENSET.bit.MC0 = 1;          // enable compare match to CC0 (P. 622)
-
-  // Enable InterruptVector
-  NVIC_EnableIRQ(TC4_IRQn); // interrupt > TC4_Handler(){}
-
-  TC->CTRLA.reg |= TC_CTRLA_ENABLE; // Enable TC (configuration mode finished)
-  while (TC->STATUS.bit.SYNCBUSY == 1); // wait for sync
+  //attachInterrupt(digitalPinToInterrupt(timepulsePin), extIntSys, FALLING);
 
   /*
       2 counters (TCC0 & TCC1)
@@ -406,226 +409,184 @@ void setup() {
   while (TCC1->SYNCBUSY.bit.ENABLE);              // Wait for synchronization
 }
 
-/*
-  100msec interruption (TC3)
-*/
-void TC4_Handler() {
-  TcCount32* TC = (TcCount32*) TC4; // get timer struct
-  TC->INTFLAG.bit.MC0 = 1; // writing a one clears the ovf flag of MC0 (P.624)
-
-  // Prepare to read counter
-  REG_TCC0_CTRLBSET = TCC_CTRLBSET_CMD_READSYNC;  // Trigger a read synchronization on the COUNT register
-  while (TCC0->SYNCBUSY.bit.CTRLB);               // Wait for the CTRLB register write synchronization
-  while (TCC0->SYNCBUSY.bit.COUNT);               // Wait for the COUNT register read sychronization
-  bikeSpeed = REG_TCC0_COUNT;                     // Read TCNT0 register (timer0 counter)
-  REG_TCC0_COUNT = 0x0000;                        // Clear timer's COUNT value
-  while (TCC0->SYNCBUSY.bit.COUNT);               // Wait for synchronization
-
-  REG_TCC1_CTRLBSET = TCC_CTRLBSET_CMD_READSYNC;  // Trigger a read synchronization on the COUNT register
-  while (TCC1->SYNCBUSY.bit.CTRLB);               // Wait for the CTRLB register write synchronization
-  while (TCC1->SYNCBUSY.bit.COUNT);               // Wait for the COUNT register read sychronization
-  bikeRpm = REG_TCC1_COUNT;                       // Read TCNT1 register (timer1 counter)
-  REG_TCC1_COUNT = 0x0000;                        // Clear timer's COUNT value
-  while (TCC1->SYNCBUSY.bit.COUNT);               // Wait for synchronization
-
-  // Long press to start/end the system
-  if (digitalRead(A3) == 1) {
-    runCounter++;
-  } else {
-    runCounter = 0;
-  }
-
-  interrupt_10hz = 1; // Calculations and SD writing are done outside the interrupt (main loop)
-}
-
-/*void extIntSys() {
-
-  }*/
-
-
 // Main loop
 void loop() {
+  // Update the Bounce instance :
+  debouncer.update();
+
   // ON/OFF
-  if (runCounter >= 10) { // long press on power button
-    runCounter = 0;
-    if (isRunning == 1) { // If stopwatch is running ...
-      isRunning = 0; // ... we stop recording
+  if (debouncer.rose()) { // long press on power button
+    if (isRunning) { // If stopwatch is running ...
+      isRunning = false; // ... we stop recording
       digitalWrite(ledPin, 0); // LED off
-      logFile.close();
+      logFile.close(); // Close file on SDcard
       LCD_CLEAR;
     } else {
-      isRunning = 1; // ... we start recording
-      newRun = 1; // A new file will be created
-      LCD_CLEAR;
-    }
-  }
-
-  if (isRunning == 1) {
-    if (newRun == 1) { // We create a new file
-      newRun = 0;
+      isRunning = true; // ... we start recording
+      stopwatchStartTime = millis(); // Define stopwatch start time
+      if (fix_data.valid.time) {
+        rtc.adjust(DateTime(fix_data.dateTime.year, fix_data.dateTime.month, fix_data.dateTime.date, fix_data.dateTime.hours, fix_data.dateTime.minutes, fix_data.dateTime.seconds)); // We adjust RTC clock with GPS datetime (UTC only)
+      }
       DateTime now = rtc.now(); // Get date now
       sprintf(filename, "%02u%02u%02u-%02u%02u%02u.txt", now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
       if (logFile.open(filename, O_CREAT | O_WRITE | O_EXCL)) {
-        logFile.println("s;brake;throttle;gear;rpm;speed;roll;pitch;temp"); // Header of the new file
-        logFile.println("   0.000;0;0;N;0;   0;   0;0"); // First "0" line
-        //rtc.adjust(DateTime(2017,01,01,0,0,0));
-        //delay(100);
-        sec = 0; // Reset stopwatch
+        logFile.println("s;brake;throttle;gear;rpm;speed;roll;pitch;temp;lat;long"); // Header of the new file
       } else {
         initerror();
       }
+
+      // Print static string to reduce time consumming
+      LCD_CLEAR;
+      LCD_POS(0, 0);
+      LCD_PRINT("Running ...");
+    }
+  }
+
+  // Every ~100ms (10Hz), we get all values (RPM, Speed, brake, gear, 9-axis data)
+  elapsedTime = millis() - lastPinRead;
+  if (elapsedTime >= 100) {
+    lastPinRead = millis(); // Reset last pin read
+    //brt = elapsedTime / 100.000;
+
+    if (isRunning) {
+      sec = (millis() - stopwatchStartTime) / 1000.000; // Update stopwatch time
+    } else {
+      sec = 0.000;
     }
 
-    if (interrupt_10hz == 1) { // A 100ms interrupt was triggered, we do here some maths for printing clean data (LCD + SD card)
-      brake = digitalRead(brakePin); // Read "brakePin" (pin is plugged on the "+" of the stop light)
-      throttle = min(((analogRead(throttlePin) / 10) * 1.23), 100); // Read voltage on "throttlePin"
-      gearValue = analogRead(gearPin); // Read voltage on "gearPin" : every gear output a specific voltage (raw data measured : 314, 520, 660, 787, 888, 975, 1023 (N))
-      bikeRpm *= 25; // Ratio between pulse and rpm, flywheel has 22 teeth(speed ratio is 1)
-      
-      interrupt_10hz = 0;
-      sec = sec + 0.1; // @10Hz (100ms interrupt) > increments of 0.100s
-      
-      // Format strings
-      dtostrf(sec, 8, 1, secString); // !! float conversion !!
-      sprintf(bikeRpmString, "%5u", bikeRpm);
-      sprintf(bikeSpeedString, "%5u", bikeSpeed);
-      sprintf(gearvalueString, "%5u", gearValue);
-      sprintf(throttleString, "%3u", throttle);
-      sprintf(brakeString, "%1u", brake);
-      
-      // Gear selected
-      if (gearValue < 366) {
-        gear = '1';
-      }
-      if (gearValue > 500 && gearValue < 540) {
-        gear = '2';
-      }
-      if (gearValue > 640 && gearValue < 680) {
-        gear = '3';
-      }
-      if (gearValue > 767 && gearValue < 807) {
-        gear = '4';
-      }
-      if (gearValue > 868 && gearValue < 908) {
-        gear = '5';
-      }
-      if (gearValue > 955 && gearValue < 995) {
-        gear = '6';
-      }
-      if (gearValue > 1000) { // "N" = 1023
-        if (gearNCheck > 3) { // We test 3 times to prevent displaying "N" between 2 gears
-          gear = 'N';
-        } else {
-          gearNCheck++;
-        }
-      } else {
-        gearNCheck = 0;
-      }
+    // Read RPM & SPEED counters
+    REG_TCC0_CTRLBSET = TCC_CTRLBSET_CMD_READSYNC;  // Trigger a read synchronization on the COUNT register
+    while (TCC0->SYNCBUSY.bit.CTRLB);               // Wait for the CTRLB register write synchronization
+    while (TCC0->SYNCBUSY.bit.COUNT);               // Wait for the COUNT register read sychronization
+    bikeSpeed = REG_TCC0_COUNT;                     // Read TCNT0 register (timer0 counter)
+    REG_TCC0_COUNT = 0x0000;                        // Clear timer's COUNT value
+    while (TCC0->SYNCBUSY.bit.COUNT);               // Wait for synchronization
 
-      
-#ifdef USE_BNO055
-      // 9-axis sensor (roll/pitch/temperature)
-      sensors_event_t event;
-      bno.getEvent(&event);
-      bno.getCalibration(&cal_sys, &cal_gyro, &cal_accel, &cal_mag); // Calibration status
-      dtostrf(event.orientation.y, 4, 0, rollString); // Roll
-      dtostrf(event.orientation.z, 4, 0, pitchString); // Pitch
-      temperature = bno.getTemp(); // Temperature
-      sprintf(temperatureString, "%d", temperature);
-      sprintf(sdString, "%s;%s;%s;%c;%s;%s;%s;%s;%s", secString, brakeString, throttleString, gear, bikeRpmString, bikeSpeedString, rollString, pitchString, temperatureString);
-#else
-      sprintf(sdString, "%s;%s;%s;%c;%s;%s", secString, brakeString, throttleString, gear, bikeRpmString, bikeSpeedString);
-#endif
-      logFile.println(sdString); // Writing a new line in the file !! Log file should be closed properly for data to be saved !!
-      digitalWrite(ledPin, digitalRead(ledPin) ^ 1); // Blinking LED (user knows it's running)
-    }
+    REG_TCC1_CTRLBSET = TCC_CTRLBSET_CMD_READSYNC;  // Trigger a read synchronization on the COUNT register
+    while (TCC1->SYNCBUSY.bit.CTRLB);               // Wait for the CTRLB register write synchronization
+    while (TCC1->SYNCBUSY.bit.COUNT);               // Wait for the COUNT register read sychronization
+    bikeRpm = REG_TCC1_COUNT;                       // Read TCNT1 register (timer1 counter)
+    REG_TCC1_COUNT = 0x0000;                        // Clear timer's COUNT value
+    while (TCC1->SYNCBUSY.bit.COUNT);               // Wait for synchronization
 
-    /*
-       Displaying on LCD (USE_DISPLAY)
-       Everything is optional
-    */
-#ifdef USE_DISPLAY
-    lcdLine = 0;
-    LCD_POS(0, lcdLine);
-    DateTime now = rtc.now();
-    sprintf(datetime, "%02u/%02u/%u", now.day(), now.month(), now.year());
-    LCD_PRINT(datetime);
-    LCD_POS(78, lcdLine);
-    sprintf(datetime, "%02u:%02u:%02u", now.hour(), now.minute(), now.second());
-    LCD_PRINT(datetime);
-    LCD_POS(0, ++lcdLine);
-    sprintf(lcdString, "TIME:%16s", secString);
-    LCD_PRINT(lcdString);
-    LCD_POS(0, ++lcdLine);
-    sprintf(lcdString, "RPM:%11str/min", bikeRpmString);
-    LCD_PRINT(lcdString);
-    LCD_POS(0, ++lcdLine);
-    sprintf(lcdString, "SPEED:%11skm/h", bikeSpeedString);
-    LCD_PRINT(lcdString);
-    LCD_POS(0, ++lcdLine);
-    sprintf(lcdString, "GEAR:%16c", gear);
-    //sprintf(lcdString, "GEAR:%11c/%u", gear, gearValue);
-    LCD_PRINT(lcdString);
-    LCD_POS(0, ++lcdLine);
-    sprintf(lcdString, "BRAKE:%15s", brakeString);
-    LCD_PRINT(lcdString);
-    LCD_POS(0, ++lcdLine);
-    sprintf(lcdString, "THROTTLE:%12s", throttleString);
-    LCD_PRINT(lcdString);
-    LCD_POS(0, ++lcdLine);
-    sprintf(lcdString, "TEMP:%16s", temperatureString);
-    LCD_PRINT(lcdString);
-#endif
-  } else {
-#ifdef USE_BNO055
-    lcdLine = 0;
+    brake = digitalRead(brakePin); // Read "brakePin" (pin is plugged on the "+" of the stop light)
+    throttle = min(((analogRead(throttlePin) / 10) * 1.23), 100); // Read voltage on "throttlePin"
+    gearValue = analogRead(gearPin); // Read voltage on "gearPin" : every gear output a specific voltage (raw data measured on Daytona 675 : 314, 520, 660, 787, 888, 975, 1023 (N))
+    bikeRpm = bikeRpm * bikeRpmCoeff * 600 * 100 / elapsedTime / 22; // Ratio between pulse and rpm (22 > flywheel has 22 teeth ### 600 > with check every 100ms, RPM is by minute) ### (* 100 / elapsedTime) > if we read counter @101ms or 102ms values should be adjusted
+    bikeSpeed = bikeSpeed * 100 / elapsedTime; // Speed ratio is 1 so no maths ### (* 100 / elapsedTime) > if we read counter @101ms or 102ms values should be adjusted
 
-    // Date
-    LCD_POS(0, lcdLine);
-    DateTime now = rtc.now();
-    sprintf(datetime, "%02u/%02u/%u", now.day(), now.month(), now.year());
-    LCD_PRINT(datetime);
-    LCD_POS(78, lcdLine);
-    sprintf(datetime, "%02u:%02u:%02u", now.hour(), now.minute(), now.second());
-    LCD_PRINT(datetime);
-
-    // Calibration offsets
-    /*bno.getSensorOffsets(calibrationData);
-      LCD_POS(0, lcdLine);
-      LCD_PRINT("OFFSETS:");
-      LCD_POS(0, ++lcdLine);
-      sprintf(lcdString, "%05u;%05u;%05u", calibrationData.accel_offset_x, calibrationData.accel_offset_x, calibrationData.accel_offset_z);
-      LCD_PRINT(lcdString);
-      LCD_POS(0, ++lcdLine);
-      sprintf(lcdString, "%05u;%05u;%05u", calibrationData.gyro_offset_x, calibrationData.gyro_offset_y, calibrationData.gyro_offset_z);
-      LCD_PRINT(lcdString);
-      LCD_POS(0, ++lcdLine);
-      sprintf(lcdString, "%05u;%05u;%05u", calibrationData.mag_offset_x, calibrationData.mag_offset_y, calibrationData.mag_offset_z);
-      LCD_PRINT(lcdString);
-      LCD_POS(0, ++lcdLine);
-      sprintf(lcdString, "%05u;%05u", calibrationData.accel_radius, calibrationData.mag_radius);
-      LCD_PRINT(lcdString);*/
-
-    // Calibration status
-    bno.getCalibration(&cal_sys, &cal_gyro, &cal_accel, &cal_mag); // Get calibration status
-    LCD_POS(0, ++lcdLine);
-    sprintf(lcdString, "CALIB:%9d;%d;%d;%d", cal_sys, cal_gyro, cal_accel, cal_mag);
-    LCD_PRINT(lcdString);
-
-    // Roll/pitch
-    sensors_event_t event;
+    // Get 9-axis sensor data
     bno.getEvent(&event);
+    temperature = bno.getTemp(); // Temperature
+    //bno.getCalibration(&cal_sys, &cal_gyro, &cal_accel, &cal_mag); // Calibration status
+
+    // Format strings
+    //dtostrf(brt, 6, 3, brts);
     dtostrf(event.orientation.y, 4, 0, rollString); // Roll
     dtostrf(event.orientation.z, 4, 0, pitchString); // Pitch
-    LCD_POS(0, ++lcdLine);
-    sprintf(lcdString, "ROLL/PITCH:%5s/%4s", rollString, pitchString);
-    LCD_PRINT(lcdString);
+    dtostrf(sec, 10, 3, secString); // !! float conversion !!
+    dtostrf(fix_data.latitude(), 13, 9, latString);
+    dtostrf(fix_data.longitude(), 13, 9, longString);
+    sprintf(bikeRpmString, "%5u", bikeRpm);
+    sprintf(bikeSpeedString, "%5u", bikeSpeed);
+    sprintf(gearvalueString, "%5u", gearValue);
+    sprintf(throttleString, "%3u", throttle);
+    sprintf(brakeString, "%1u", brake);
+    sprintf(temperatureString, "%d", temperature);
 
-    //Temperature
-    LCD_POS(0, ++lcdLine);
-    sprintf(lcdString, "TEMP:%16d", bno.getTemp());
-    LCD_PRINT(lcdString);
-    delay(100);
-#endif
+    // Gear selected
+    if (gearValue <= 433) {
+      gear = '1';
+    }
+    if (gearValue > 433 && gearValue <= 590) {
+      gear = '2';
+    }
+    if (gearValue > 590 && gearValue <= 723) {
+      gear = '3';
+    }
+    if (gearValue > 723 && gearValue <= 837) {
+      gear = '4';
+    }
+    if (gearValue > 837 && gearValue <= 931) {
+      gear = '5';
+    }
+    if (gearValue > 931 && gearValue <= 997) {
+      gear = '6';
+    }
+    if (gearValue > 998) { // "N" = 1023
+      if (gearNCheck > 3) { // We test 3 times to prevent displaying "N" between 2 gears
+        gear = 'N';
+      } else {
+        gearNCheck++;
+      }
+    } else {
+      gearNCheck = 0;
+    }
+    sensorsDataReady = true;
+  }
+
+  // Get GPS frames through serial port (this is CRITICAL, data could be sent at any moment by the GPS so main loop should be executed in a minimum of time)
+  if (gps.available(gps_port)) {
+    fix_data = gps.read();
+    gpsDataReady = true;
+  }
+
+  // Sync file on SDcard every 30sec to avoid dataloss on power failure
+  if (isRunning && (millis() - lastSdSync > 30000)) {
+    lastSdSync = millis();
+    logFile.sync();
+  }
+  
+  /*
+    Displaying on LCD
+    Everything is optional
+  */
+  if (millis() - lastLCDupdate > 1000) {
+    lastLCDupdate = millis();
+    if (isRunning) {
+      digitalWrite(ledPin, digitalRead(ledPin) ^ 1); // Blinking LED (user knows it's running)
+    } else {     
+      lcdLine = 0;
+      LCD_POS(0, lcdLine);
+      DateTime now = rtc.now();
+      sprintf(datetime, "%02u/%02u/%u", now.day(), now.month(), now.year());
+      LCD_PRINT(datetime);
+      LCD_POS(78, lcdLine);
+      sprintf(datetime, "%02u:%02u:%02u", now.hour(), now.minute(), now.second());
+      LCD_PRINT(datetime);
+      LCD_POS(0, ++lcdLine);
+      sprintf(lcdString, "RPM:%11str/min", bikeRpmString);
+      //sprintf(lcdString, "TIME:%16s", secString);
+      LCD_PRINT(lcdString);
+      LCD_POS(0, ++lcdLine);
+      sprintf(lcdString, "SPEED:%11skm/h", bikeSpeedString);
+      LCD_PRINT(lcdString);
+      LCD_POS(0, ++lcdLine);
+      sprintf(lcdString, "GEAR:%16c", gear);
+      //sprintf(lcdString, "GEAR:%11c/%u", gear, gearValue);
+      LCD_PRINT(lcdString);
+      LCD_POS(0, ++lcdLine);
+      sprintf(lcdString, "BRAKE:%15s", brakeString);
+      LCD_PRINT(lcdString);
+      LCD_POS(0, ++lcdLine);
+      sprintf(lcdString, "THROTTLE:%12s", throttleString);
+      LCD_PRINT(lcdString);
+      LCD_POS(0, ++lcdLine);
+      sprintf(lcdString, "TEMP:%16s", temperatureString);
+      LCD_PRINT(lcdString);
+      LCD_POS(0, ++lcdLine);
+      sprintf(lcdString, "GPS:%02u:%02u:%02u:%03u", fix_data.dateTime.hours, fix_data.dateTime.minutes, fix_data.dateTime.seconds, fix_data.dateTime_cs);
+      LCD_PRINT(lcdString);
+    }
+  }
+
+  if (isRunning) {
+    if (gpsDataReady && sensorsDataReady) {
+      //write pins, IMU, GPS to SD card
+      sprintf(sdString, "%s;%s;%s;%c;%s;%s;%s;%s;%s;%s;%s;%02u;%03u", secString, brakeString, throttleString, gear, bikeRpmString, bikeSpeedString, rollString, pitchString, temperatureString, latString, longString, fix_data.dateTime.seconds, fix_data.dateTime_cs);
+      logFile.println(sdString); // Writing a new line in the file !! Log file should be closed properly for data to be saved !!
+      gpsDataReady = false;
+      sensorsDataReady = false;
+    }
   }
 }
