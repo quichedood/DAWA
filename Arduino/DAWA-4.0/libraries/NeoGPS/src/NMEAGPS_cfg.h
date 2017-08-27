@@ -178,7 +178,7 @@
 //#define NMEAGPS_SAVE_TALKER_ID
 //#define NMEAGPS_PARSE_TALKER_ID
 
-#define NMEAGPS_PARSE_PROPRIETARY
+//#define NMEAGPS_PARSE_PROPRIETARY
 #ifdef NMEAGPS_PARSE_PROPRIETARY
   //#define NMEAGPS_SAVE_MFR_ID
   #define NMEAGPS_PARSE_MFR_ID
@@ -218,7 +218,7 @@
 // If not defined, virtuals are not used, with a slight size (2 bytes) and 
 // execution time savings.
 
-#define NMEAGPS_DERIVED_TYPES
+//#define NMEAGPS_DERIVED_TYPES
 
 #ifdef NMEAGPS_DERIVED_TYPES
   #define NMEAGPS_VIRTUAL virtual
