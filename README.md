@@ -30,6 +30,11 @@ This file will contain track name and finishline coordinates, one line per track
 To keep precision, latitude and longitude should be converted to integers (multiply by 10 000 000).  
 When start recording the closer track is automatically chosen.
 
+# What's next
+Some ideas :  
+* __Bluetooth connectivity__ : Add Bluetooth support to get realtime data or transfer CSV files on smartphone
+* __Laptimer split time__ : Add split time management
+
 # Repository Contents
 * /Arduino - The .ino file you need to put in the Arduino M0
 * /Documentation - Some brief explanations about this shield (french - not translated)
