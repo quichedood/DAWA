@@ -5,14 +5,19 @@ DAWA is an Arduino datalogger (and laptimer) shield for your motorbike.
 It records 10 times per seconds in a CSV file lots of information.
 
 # What information is logged ?
-* __Raw data acquisition__ : On Triumph bikes (and many others) ECU values can be directly read like : RPM, SPEED, GEAR POSITION, THROTTLE and BRAKE state
+* __Raw data acquisition__ : On Triumph bikes and many others, ECU values can be directly read (I personnaly use : RPM, SPEED, GEAR POSITION, THROTTLE and BRAKE state)
 * __Environement values__ : A 9-axis sensor (BNO055) is used to store G-forces and I hope soon, roll and pitch
 * __Position values__ : A UBLOX 10Hz GPS chip gets realtime coordinates
-* __Screen display__ : A little OLED screen is attached to view values in realtime
-* __Laptimer__ : Laptimer functions are now working great ! They are based on GPS values.
-* __Recorder__ : All these information are stored on a SD card 10 times per seconds in a CSV file
 
-# How it work ?
+# Where is it logged ?
+Everything is stored on a micro SD card.  
+10 times per seconds, a new line is created in a CSV file. This line contains every data values separated by a semicolon.  
+Current values are displayed in realtime on the OLED screen attached.
+
+# Could it be used as a laptimer ?
+YES ! Since v4 and the integration of a 10Hz GPS chip, laptimer functions are available.
+
+# How does it work ?
 I couldn't make it easier !  
 Press the button start recording, press again stop recording :)  
 One CSV file is created on each new record.
