@@ -39,10 +39,11 @@ Bluetooth connection is usefull in these 2 cases :
 
 I'm using "Serial Bluetooth Terminal" on Androïd. Connect and type "help" to view all available commands
 
-# What's next
-Some ideas :  
-* __Bluetooth connectivity__ : Add Bluetooth support to get realtime data or transfer CSV files on smartphone
+# What's next  
 * __Laptimer split time__ : Add split time management
+
+# Known bugs
+* __Lean angle__ : Seems easy but in fact very complicated to obtain good values without drift
 
 # Repository Contents
 * /Arduino - The .ino file you need to put in the Arduino M0
