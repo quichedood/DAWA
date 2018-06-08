@@ -32,6 +32,13 @@ This file will contain track name and finishline coordinates, one line per track
 To keep precision, latitude and longitude should be converted to integers (multiply by 10 000 000).  
 When start recording the closer track is automatically chosen.
 
+# You said Bluetooth ?
+Bluetooth connection is usefull in these 2 cases :
+- You just finish your track session and want to know lap times / best lap
+- Before using DAWA, some parameters could be adjusted, use the bluetooth console to setup them !
+
+I'm using "Serial Bluetooth Terminal" on Androïd. Connect and type "help" to view all available commands
+
 # What's next
 Some ideas :  
 * __Bluetooth connectivity__ : Add Bluetooth support to get realtime data or transfer CSV files on smartphone
