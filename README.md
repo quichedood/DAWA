@@ -8,6 +8,8 @@ It records 10 times per seconds in a CSV file lots of information.
 * __Raw data acquisition__ : On Triumph bikes and many others, ECU values can be directly read (I personnaly use : RPM, SPEED, GEAR POSITION, THROTTLE and BRAKE state)
 * __Environement values__ : A 9-axis sensor (BNO055) is used to store G-forces and I hope soon, roll and pitch
 * __Position values__ : A UBLOX 10Hz GPS chip gets realtime coordinates
+* __Infrared temperatures__ : You can plug up to 4 infrared temperature sensors (tyres or ground t° for example)
+* __Analog inputs__ : You can measure up to 6 analog inputs (suspension sensors for exemple)
 
 # Where is it logged ?
 Everything is stored on a micro SD card.  
