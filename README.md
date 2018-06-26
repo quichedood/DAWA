@@ -1,6 +1,6 @@
 # DAWA - Data Acquisition With Arduino
 French official website project : http://dawa.panik-po.com/
-![DAWA-V4](http://dawa.panik-po.com/images/dawa-v4.jpg)
+![DAWA-V4](http://dawa.panik-po.com/images/dawa-v5-pcb-1-hi.png)
 
 DAWA is an Arduino datalogger (and laptimer) shield for your motorbike.
 It records 10 times per seconds in a CSV file lots of information.
