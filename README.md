@@ -1,3 +1,5 @@
+New version here : https://github.com/quichedood/DAWA-6.1
+
 # DAWA - Data Acquisition With Arduino
 French official website project : http://dawa.panik-po.com/
 ![DAWA-V4](http://dawa.panik-po.com/images/dawa-v5-pcb-1-hi.png)
